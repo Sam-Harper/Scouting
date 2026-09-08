@@ -1,5 +1,4 @@
 import ROOT
-import numpy as np
 import math
 
 class BDTTransformer:
@@ -11,7 +10,7 @@ class BDTTransformer:
     
     def transform(self,raw_value):
         #features_ptr = features.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
-        return self.offset + self.scale * np.sin(raw_value)
+        return self.offset + self.scale * math.sin(raw_value)
 
 class RegressionContainer:
     def __init__(self,base_file,range_mean_min,range_mean_max,range_sigma_min,range_sigma_max):
@@ -19,9 +18,7 @@ class RegressionContainer:
         
         self.root_file_eb = ROOT.TFile(base_file.format(region="EB"),"READ")
         self.root_file_ee = ROOT.TFile(base_file.format(region="EE"),"READ")
-        print(self.root_file_eb.GetName())
-        print(self.root_file_ee.GetName())
-
+        
         self.forest_mean_eb = getattr(self.root_file_eb,f"EBCorrection")
         self.forest_mean_ee = getattr(self.root_file_ee,f"EECorrection")
         
@@ -50,7 +47,7 @@ def eta_to_theta(eta: float) -> float:
     return 2.0 * math.atan(math.exp(-eta))
 
 def pt_to_p(pt,eta):
-    return safe_divide(pt,np.sin(eta_to_theta(eta)),0)
+    return safe_divide(pt,math.sin(eta_to_theta(eta)),0)
 
 def get_best_trk_indx(calo_pt,calo_eta,trk_pts,trk_etas):
     """
@@ -81,7 +78,7 @@ def is_eb(seedid):
     detid = ROOT.DetId(seedid)
     return detid.subdetId() == 1
 
-def get_features_calo(tree,ele_indices=None):
+def get_features_calo(tree,ele_mask=None):
     """
     Features for the ECAL-only regression read from the scouting nanoAOD.
 
@@ -89,10 +86,15 @@ def get_features_calo(tree,ele_indices=None):
     EgRegresTrainerLegacy/python/regtools_scouting.py where ele.energy is
     pt converted to p and iEtaOrIX/iPhiOrIY are derived from the seed id
     """
-    features = []
-    if ele_indices is None:
-        ele_indices = range(tree.nScoutingElectron)
-    for ele_nr in ele_indices:
+    features = [None]*tree.nScoutingElectron
+
+    if ele_mask is None:
+        ele_mask = [True]*tree.nScoutingElectron
+    
+    for ele_nr in range(tree.nScoutingElectron):
+        if not ele_mask[ele_nr]:
+            continue
+
         ele_features = ROOT.std.vector('float')(11)
         seed_id = tree.ScoutingElectron_seedId[ele_nr]
         s_min = tree.ScoutingElectron_sMin[ele_nr]
@@ -108,33 +110,35 @@ def get_features_calo(tree,ele_indices=None):
         ele_features[7] = 0. if math.isnan(s_maj) else s_maj
         ele_features[8] = tree.ScoutingElectron_rechitZeroSuppression[ele_nr]
         ele_features[9],ele_features[10] = get_ietaiphi(seed_id)
-        features.append({"features" : ele_features,"isEB" : is_eb(seed_id)})
+        features[ele_nr] = {"features" : ele_features,"isEB" : is_eb(seed_id)}
     return features
 
 
-def get_raw_comb(tree,ecal_meansigmas,ele_indices=None):
+def get_raw_comb(tree,ecal_meansigmas,ele_mask=None):
     """
     Raw E-p combination, ie the inverse of the RegArgs.set_elecomb_default()
     target without the mc.energy:
        (corrEcalE*trkPErr^2 + trkP*ecalErr^2) / (trkPErr^2 + ecalErr^2)
     with the track quantities taken from the best track mode variables
     """
-    raw_comb = []
-    if ele_indices is None:
-        ele_indices = range(tree.nScoutingElectron)
-    for ele_index,ele_tree_index in enumerate(ele_indices):
-        calo_e = pt_to_p(tree.ScoutingElectron_pt[ele_tree_index],tree.ScoutingElectron_eta[ele_tree_index])
+    raw_comb = [None]*tree.nScoutingElectron
+    if ele_mask is None:
+        ele_mask = [True]*tree.nScoutingElectron
+    for ele_index in range(tree.nScoutingElectron):
+        if not ele_mask[ele_index]:
+            continue
+        calo_e = pt_to_p(tree.ScoutingElectron_pt[ele_index],tree.ScoutingElectron_eta[ele_index])
         ecal_mean,ecal_sigma = ecal_meansigmas[ele_index]
         calo_e_corr = calo_e * ecal_mean
         calo_e_err = calo_e * ecal_sigma
-        trk_p = tree.ScoutingElectron_bestTrack_pMode[ele_tree_index]
-        trk_p_err = abs(tree.ScoutingElectron_bestTrack_qoverpModeError[ele_tree_index]) * trk_p * trk_p
+        trk_p = tree.ScoutingElectron_bestTrack_pMode[ele_index]
+        trk_p_err = abs(tree.ScoutingElectron_bestTrack_qoverpModeError[ele_index]) * trk_p * trk_p
         numer = calo_e_corr * trk_p_err**2 + trk_p * calo_e_err**2
         denom = trk_p_err**2 + calo_e_err**2
-        raw_comb.append(safe_divide(numer,denom,calo_e_corr))
+        raw_comb[ele_index] = safe_divide(numer,denom,calo_e_corr)
     return raw_comb
 
-def get_features_comb(tree,ecal_meansigmas,ele_indices=None):
+def get_features_comb(tree,ecal_meansigmas,ele_mask=None):
     """
     Features for the E-p combination regression read from the scouting nanoAOD.
 
@@ -142,25 +146,27 @@ def get_features_comb(tree,ecal_meansigmas,ele_indices=None):
     EgRegresTrainerLegacy/python/regtools_scouting.py with the track mode
     variables taken directly from the best track branches
     """
-    features = []
-    if ele_indices is None:
-        ele_indices = range(tree.nScoutingElectron)
-    for ele_index, ele_tree_index in enumerate(ele_indices):
+    features = [None]*tree.nScoutingElectron
+    if ele_mask is None:
+        ele_mask = [True]*tree.nScoutingElectron
+    for ele_index in range(tree.nScoutingElectron):
+        if not ele_mask[ele_index]:
+            continue
         ele_features = ROOT.std.vector('float')(8)
-        calo_e = pt_to_p(tree.ScoutingElectron_pt[ele_tree_index],tree.ScoutingElectron_eta[ele_tree_index])
+        calo_e = pt_to_p(tree.ScoutingElectron_pt[ele_index],tree.ScoutingElectron_eta[ele_index])
         ecal_mean,ecal_sigma = ecal_meansigmas[ele_index]
         calo_e_corr = calo_e * ecal_mean
-        trk_p_mode = tree.ScoutingElectron_bestTrack_pMode[ele_tree_index]
+        trk_p_mode = tree.ScoutingElectron_bestTrack_pMode[ele_index]
 
         ele_features[0] = calo_e_corr
         ele_features[1] = safe_divide(ecal_sigma,ecal_mean)
-        ele_features[2] = safe_divide(tree.ScoutingElectron_bestTrack_qoverpModeError[ele_tree_index],trk_p_mode)
+        ele_features[2] = safe_divide(tree.ScoutingElectron_bestTrack_qoverpModeError[ele_index],trk_p_mode)
         ele_features[3] = safe_divide(calo_e_corr,trk_p_mode)
-        ele_features[4] = tree.ScoutingElectron_r9[ele_tree_index]
-        ele_features[5] = tree.ScoutingElectron_trackfbrem[ele_tree_index]
-        ele_features[6] = tree.ScoutingElectron_bestTrack_etaMode[ele_tree_index]
-        ele_features[7] = tree.ScoutingElectron_bestTrack_phiMode[ele_tree_index]
-        features.append({"features" : ele_features,"isEB" : is_eb(tree.ScoutingElectron_seedId[ele_tree_index])})
+        ele_features[4] = tree.ScoutingElectron_r9[ele_index]
+        ele_features[5] = tree.ScoutingElectron_trackfbrem[ele_index]
+        ele_features[6] = tree.ScoutingElectron_bestTrack_etaMode[ele_index]
+        ele_features[7] = tree.ScoutingElectron_bestTrack_phiMode[ele_index]
+        features[ele_index] = {"features" : ele_features,"isEB" : is_eb(tree.ScoutingElectron_seedId[ele_index])}
     return features
 
 
