@@ -40,7 +40,7 @@ except ImportError:
 ELE_BRANCHES = [
     "pt", "eta", "phi", "sigmaIetaIeta", "r9", "sMin", "sMaj","hOverE",
     "rechitZeroSuppression", "seedId", "trackIso", "dEtaIn", "trackfbrem",
-    "bestTrack_etaMode", "bestTrack_phiMode", "bestTrack_pMode",
+    "bestTrack_etaMode", "bestTrack_phiMode", "bestTrack_pMode","bestTrack_pt",
     "bestTrack_qoverpModeError",
 ]
 BRANCHES = (
@@ -67,7 +67,7 @@ def get_id_mask(vals, include_ee=False):
     valid_trk = vals["bestTrack_etaMode"] <= 1000
     trk_pt = vals["bestTrack_pMode"] / np.cosh(np.where(valid_trk, vals["bestTrack_etaMode"], 0.0))
     is_eb = np.abs(vals["eta"]) < 1.479
-    common = valid_trk & (vals["trackIso"] <= 0) & (np.abs(vals["dEtaIn"]) <= 0.03) & (trk_pt > 5)  
+    common = valid_trk & (vals["trackIso"] <= 0) & (np.abs(vals["dEtaIn"]) <= 0.03) & (trk_pt > 12)  
     passing = common & is_eb & (vals["sigmaIetaIeta"] < 0.0105)
     if include_ee:
         passing |= common & ~is_eb & (vals["sigmaIetaIeta"] < 0.034)
@@ -120,8 +120,10 @@ def fill_mass_hists(vals, counts, corr, id_mask, hists):
     cosh_eta = np.cosh(eta)
     pts = {
         "massHist": selected(vals["pt"]),
-        "corrMassHist": selected(corr["corrEnergy"]) / cosh_eta,
+        "trkMassHist": selected(vals["bestTrack_pt"]),
+        "trkModeMassHist": selected(vals["bestTrack_pMode"]) / cosh_eta,
         "caloCorrMassHist": selected(corr["corrEcalEnergy"]) / cosh_eta,
+        "caloTrkMassHist": selected(corr["corrEnergy"]) / cosh_eta,
     }
     for name, pt in pts.items():
         p4 = ak.zip(
@@ -152,7 +154,7 @@ if __name__ == "__main__":
         0.2, 3, 0.0002, 0.5,
     )
 
-    hists = {name: np.zeros(len(MASS_BINS) - 1) for name in ("massHist", "corrMassHist", "caloCorrMassHist")}
+    hists = {name: np.zeros(len(MASS_BINS) - 1) for name in ("massHist", "trkMassHist", "trkModeMassHist", "caloCorrMassHist", "caloTrkMassHist")}
 
     output_file = uproot.recreate(args.outputfile)
     events_written = 0

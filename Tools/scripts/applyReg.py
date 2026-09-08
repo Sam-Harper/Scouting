@@ -40,15 +40,18 @@ if __name__ == "__main__":
     input_file = ROOT.TFile(args.inputfile, "READ")
     event_tree = input_file.Events
   
-    ecal_reg = RegressionContainer("EgRegresTrainerLegacy/resultsEleTrkTrainOff/regEleEcalScout2024_stdVar_stdCuts_{region}_ntrees1500_results.root",0.2,2,0.0002,0.5)
-    comb_reg = RegressionContainer("EgRegresTrainerLegacy/resultsEleTrkTrainOff/regEleEcalTrkTrainScout2024_stdVar_stdCuts_{region}_ntrees1500_results.root",0.2,3,0.0002,0.5)
+    ecal_reg = RegressionContainer("Scouting/Tools/data/regEleEcalScout2024_stdVar_stdCuts_{region}_ntrees1500_results.root",0.2,2,0.0002,0.5)
+    comb_reg = RegressionContainer("Scouting/Tools/data/regEleEcalTrkTrainScout2024_stdVar_stdCuts_{region}_ntrees1500_results.root",0.2,3,0.0002,0.5)
 
     output_file = ROOT.TFile(args.outputfile,"RECREATE")
     mass_hist = ROOT.TH1D("massHist","",1200,0,120)
     corr_mass_hist = ROOT.TH1D("corrMassHist","",1200,0,120)
     calo_corr_mass_hist = ROOT.TH1D("caloCorrMassHist","",1200,0,120)
 
+    nr_events = int(event_tree.GetEntries())
     for event_indx,event in enumerate(event_tree):
+        if event_indx % 10000 == 0:
+            print(f"Processing event {event_indx}/{nr_events}")
         ele_passing_id = list(get_eles_passing_id(event_tree))        
         calo_features = egregression.get_features_calo(event_tree,ele_passing_id)
         calo_meansigmas = [ecal_reg.get_meansigma(f["features"],f["isEB"]) for f in calo_features]
