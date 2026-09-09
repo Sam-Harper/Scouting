@@ -48,7 +48,7 @@ BRANCHES = (
     + [f"ScoutingElectron_{name}" for name in ELE_BRANCHES]
 )
 
-MASS_BINS = np.linspace(0.0, 120.0, 1201)
+MASS_BINS = np.linspace(0.0, 120.0, 12001)
 
 
 def get_flat_electrons(events):
@@ -68,6 +68,27 @@ def get_id_mask(vals, include_ee=False):
     trk_pt = vals["bestTrack_pMode"] / np.cosh(np.where(valid_trk, vals["bestTrack_etaMode"], 0.0))
     is_eb = np.abs(vals["eta"]) < 1.479
     common = valid_trk & (vals["trackIso"] <= 0) & (np.abs(vals["dEtaIn"]) <= 0.03) & (trk_pt > 5)  
+    passing = common & is_eb & (vals["sigmaIetaIeta"] < 0.0105)
+    if include_ee:
+        passing |= common & ~is_eb & (vals["sigmaIetaIeta"] < 0.034)
+    return passing
+
+
+def get_jpsi_id_mask(vals, corr, include_ee=False):
+    """Electron ID optimised for the J/psi -> ee peak (barrel only unless
+    include_ee).
+
+    At m ~ 3 GeV the two electrons sit inside each other's isolation
+    cones, so no trackIso cut is applied; instead the track-cluster
+    matching is tightened and electrons with a large relative energy
+    uncertainty from the E-p combination regression are dropped.
+    """
+    valid_trk = vals["bestTrack_etaMode"] <= 1000
+    trk_pt = vals["bestTrack_pMode"] / np.cosh(np.where(valid_trk, vals["bestTrack_etaMode"], 0.0))
+    is_eb = np.abs(vals["eta"]) < 1.479
+    rel_err = corr["corrEnergyErr"] / np.maximum(corr["corrEnergy"], 1e-9)
+    #rel_err = 0
+    common = valid_trk & (np.abs(vals["dEtaIn"]) <= 0.01) & (trk_pt > 3) & (rel_err < 0.04)
     passing = common & is_eb & (vals["sigmaIetaIeta"] < 0.0105)
     if include_ee:
         passing |= common & ~is_eb & (vals["sigmaIetaIeta"] < 0.034)
@@ -108,11 +129,12 @@ def apply_regressions(vals, ecal_reg, comb_reg):
     }
 
 
-def fill_mass_hists(vals, counts, corr, id_mask, hists):
+def fill_mass_hists(vals, counts, corr, id_mask, hists, max_dr=None):
     """Fill the dielectron mass histograms from pairs of ID-passing electrons.
 
     Each histogram is filled from opposite-charge pairs; the "SS"-suffixed
-    variant is filled from same-charge pairs.
+    variant is filled from same-charge pairs.  If max_dr is given, only
+    pairs with deltaR (from the track mode direction) below it are used.
     """
     sel = ak.unflatten(id_mask, counts)
 
@@ -123,6 +145,14 @@ def fill_mass_hists(vals, counts, corr, id_mask, hists):
     phi = selected(vals["bestTrack_phiMode"])
     charge1, charge2 = ak.unzip(ak.combinations(selected(vals["bestTrack_charge"]), 2))
     opp_charge = charge1 * charge2 < 0
+    same_charge = ~opp_charge
+    if max_dr is not None:
+        eta1, eta2 = ak.unzip(ak.combinations(eta, 2))
+        phi1, phi2 = ak.unzip(ak.combinations(phi, 2))
+        dphi = np.mod(phi1 - phi2 + np.pi, 2 * np.pi) - np.pi
+        pass_dr = (eta1 - eta2) ** 2 + dphi**2 < max_dr**2
+        opp_charge = opp_charge & pass_dr
+        same_charge = same_charge & pass_dr
     cosh_eta = np.cosh(eta)
     pts = {
         "massHist": selected(vals["pt"]),
@@ -138,7 +168,7 @@ def fill_mass_hists(vals, counts, corr, id_mask, hists):
         )
         ele1, ele2 = ak.unzip(ak.combinations(p4, 2))
         masses = (ele1 + ele2).mass
-        for suffix, mask in (("", opp_charge), ("SS", ~opp_charge)):
+        for suffix, mask in (("", opp_charge), ("SS", same_charge)):
             hists[name + suffix] += np.histogram(
                 ak.to_numpy(ak.flatten(masses[mask])), bins=MASS_BINS
             )[0]
@@ -151,6 +181,7 @@ if __name__ == "__main__":
     parser.add_argument("-n", "--max-events", type=int, default=None, help="Process at most this many events (total across all files)")
     parser.add_argument("--step-size", default="200 MB", help="uproot iteration step size")
     parser.add_argument("--include-ee", action="store_true", help="Also use endcap electrons in the mass histograms")
+    parser.add_argument("--jpsi-sel", action="store_true", help="Use the low-mass (J/psi) electron ID and a deltaR<0.7 pair cut for the mass histograms")
     parser.add_argument("--datadir", default="Scouting/Tools/data", help="Directory with the regression npz files")
     args = parser.parse_args()
 
@@ -183,8 +214,11 @@ if __name__ == "__main__":
             events = events[: args.max_events - events_written]
         vals, counts = get_flat_electrons(events)
         corr = apply_regressions(vals, ecal_reg, comb_reg)
-        id_mask = get_id_mask(vals, args.include_ee)
-        fill_mass_hists(vals, counts, corr, id_mask, hists)
+        if args.jpsi_sel:
+            id_mask = get_jpsi_id_mask(vals, corr, args.include_ee)
+        else:
+            id_mask = get_id_mask(vals, args.include_ee)
+        fill_mass_hists(vals, counts, corr, id_mask, hists, max_dr=0.7 if args.jpsi_sel else None)
 
         out_electrons = ak.zip(
             {name: ak.unflatten(arr.astype(np.float32), counts) for name, arr in corr.items()}
