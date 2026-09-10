@@ -1,18 +1,15 @@
 """
-Columnar (numpy) version of Scouting.Tools.egregression.
+numpy version of Scouting.Tools.egregression.
 
-All functions operate on flat per-electron numpy arrays (one entry per
-electron candidate, event structure already flattened away). The feature
-definitions mirror egregression.py, which in turn mirrors
-RegArgs.set_defaults() / set_elecomb_default() in
-EgRegresTrainerLegacy/python/regtools_scouting.py.
+All functions operate on flat per-electron numpy arrays 
+which are one entry per electron candidate
 """
 import numpy as np
 
 try:
-    from Scouting.Tools.gbr_numpy import load_regression
+    from Scouting.Tools.gbrforest_np import load_regression
 except ImportError:
-    from gbr_numpy import load_regression
+    from gbrforest_np import load_regression
 
 
 class BDTTransformer:
@@ -91,7 +88,7 @@ def get_features_calo(vals):
       rechitZeroSuppression, seedId
     Returns (features (n, 11) float32, is_eb (n,) bool).
     """
-    i1, i2, is_eb = decode_seed_id(vals["seedId"])
+    ieta_or_ix, iphi_or_iy, is_eb = decode_seed_id(vals["seedId"])
     features = np.column_stack(
         [
             vals["rho"],
@@ -103,8 +100,8 @@ def get_features_calo(vals):
             np.where(np.isnan(vals["sMin"]), 0.0, vals["sMin"]),
             np.where(np.isnan(vals["sMaj"]), 0.0, vals["sMaj"]),
             vals["rechitZeroSuppression"],
-            i1,
-            i2,
+            ieta_or_ix,
+            iphi_or_iy,
         ]
     ).astype(np.float32)
     return features, is_eb
