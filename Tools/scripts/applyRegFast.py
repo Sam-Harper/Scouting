@@ -171,7 +171,8 @@ def fill_mass_hists(vals, counts, corr, id_mask, hists, max_dr=None):
         "caloTrkMassHist": selected(corr["corrEnergy"]) / cosh_eta,
     }
     for name, pt in pts.items():
-        pt_mask = ak.combinations(pt > 20, 2)
+        pt_pass1, pt_pass2 = ak.unzip(ak.combinations(pt > 20, 2))
+        pt_mask = pt_pass1 & pt_pass2
         p4 = ak.zip(
             {"pt": pt, "eta": eta, "phi": phi, "mass": ak.zeros_like(pt)},
             with_name="Momentum4D",
