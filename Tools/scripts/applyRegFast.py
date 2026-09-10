@@ -19,6 +19,7 @@ Differences to applyReg.py:
   - histograms lose their under/overflow content
 """
 import argparse
+import concurrent.futures
 import time
 
 import numpy as np
@@ -171,7 +172,7 @@ def fill_mass_hists(vals, counts, corr, id_mask, hists, max_dr=None):
         "caloTrkMassHist": selected(corr["corrEnergy"]) / cosh_eta,
     }
     for name, pt in pts.items():
-        pt_pass1, pt_pass2 = ak.unzip(ak.combinations(pt > 20, 2))
+        pt_pass1, pt_pass2 = ak.unzip(ak.combinations(pt > 0, 2))
         pt_mask = pt_pass1 & pt_pass2
         p4 = ak.zip(
             {"pt": pt, "eta": eta, "phi": phi, "mass": ak.zeros_like(pt)},
@@ -194,11 +195,20 @@ if __name__ == "__main__":
     parser.add_argument("-i", "--inputfiles", nargs="+", help="Input file(s)", required=True)
     parser.add_argument("-o", "--outputfile", help="Output file", required=True)
     parser.add_argument("-n", "--max-events", type=int, default=None, help="Process at most this many events (total across all files)")
-    parser.add_argument("--step-size", default="200 MB", help="uproot iteration step size")    
+    parser.add_argument("--step-size", default="200 MB", help="uproot iteration step size")
+    parser.add_argument("--decomp-threads", type=int, default=8, help="Threads for uproot basket decompression")
+    parser.add_argument("--njobs", type=int, default=1, help="Split the input files over this many jobs")
+    parser.add_argument("--jobnr", type=int, default=0, help="Which job this is (0..njobs-1); processes inputfiles[jobnr::njobs]")
     parser.add_argument("--jpsi-sel", action="store_true", help="Use the low-mass (J/psi) electron ID and a deltaR<0.7 pair cut for the mass histograms")    
     parser.add_argument("--datadir", default="Scouting/Tools/data", help="Directory with the regression npz files")
     
     args = parser.parse_args()
+
+    if not 0 <= args.jobnr < args.njobs:
+        parser.error(f"--jobnr must be in [0, {args.njobs})")
+    inputfiles = args.inputfiles[args.jobnr :: args.njobs]
+    if not inputfiles:
+        parser.error(f"job {args.jobnr}/{args.njobs} has no input files ({len(args.inputfiles)} files given)")
 
     ecal_reg = egreg.RegressionContainer(
         f"{args.datadir}/regEleEcalScout2024_stdVar_stdCuts_{{region}}_ntrees1500_results.npz",
@@ -220,12 +230,14 @@ if __name__ == "__main__":
     events_written = 0
     start_time = time.time()
 
-    input_trees = [f"{name}:Events" for name in args.inputfiles]
+    input_trees = [f"{name}:Events" for name in inputfiles]
     total_entries = sum(entries for _, _, entries in uproot.num_entries(input_trees))
     if args.max_events is not None:
         total_entries = min(total_entries, args.max_events)
 
-    for events in uproot.iterate(input_trees, BRANCHES, step_size=args.step_size):
+    decomp_executor = concurrent.futures.ThreadPoolExecutor(args.decomp_threads)
+    for events in uproot.iterate(input_trees, BRANCHES, step_size=args.step_size,
+                                 decompression_executor=decomp_executor):
         if args.max_events is not None:
             events = events[: args.max_events - events_written]
         vals, counts = get_flat_electrons(events)
