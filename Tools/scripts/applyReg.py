@@ -5,7 +5,8 @@ import itertools
 from Scouting.Tools.egregression import RegressionContainer
 import Scouting.Tools.egregression as egregression
 
-def get_eles_passing_id(event_tree):
+def get_eles_id_mask(event_tree):
+    mask = [False]*event_tree.nScoutingElectron
     for ele_nr in range(event_tree.nScoutingElectron):
         if event_tree.ScoutingElectron_bestTrack_etaMode[ele_nr] > 1000:
             continue
@@ -18,8 +19,7 @@ def get_eles_passing_id(event_tree):
                 continue
             if abs(event_tree.ScoutingElectron_dEtaIn[ele_nr]) > 0.05:
                 continue
-        else:
-            continue
+        else:            
             if event_tree.ScoutingElectron_sigmaIetaIeta[ele_nr] >= 0.034:
                 continue
             if event_tree.ScoutingElectron_trackIso[ele_nr] > 5:
@@ -27,7 +27,8 @@ def get_eles_passing_id(event_tree):
             if abs(event_tree.ScoutingElectron_dEtaIn[ele_nr]) > 0.05:
                 continue
 
-        yield ele_nr
+        mask[ele_nr] = True
+    return mask
 
 
 if __name__ == "__main__":
@@ -52,7 +53,7 @@ if __name__ == "__main__":
     for event_indx,event in enumerate(event_tree):
         if event_indx % 10000 == 0:
             print(f"Processing event {event_indx}/{nr_events}")
-        ele_passing_id = list(get_eles_passing_id(event_tree))        
+        ele_passing_id = get_eles_id_mask(event_tree)        
         calo_features = egregression.get_features_calo(event_tree,ele_passing_id)
         calo_meansigmas = [ecal_reg.get_meansigma(f["features"],f["isEB"]) for f in calo_features]
         comb_features = egregression.get_features_comb(event_tree,calo_meansigmas,ele_passing_id)
@@ -67,14 +68,16 @@ if __name__ == "__main__":
         calo_corr_p4s = []
 
 
-        for ele_index, ele_tree_index in enumerate(ele_passing_id):
-            eta = event_tree.ScoutingElectron_bestTrack_etaMode[ele_tree_index]
-            phi = event_tree.ScoutingElectron_bestTrack_phiMode[ele_tree_index]
-            if event_tree.ScoutingElectron_bestTrack_etaMode[ele_tree_index] > 1000:
+        for ele_index in range(event_tree.nScoutingElectron):
+            if not ele_passing_id[ele_index]:
+                continue
+            eta = event_tree.ScoutingElectron_bestTrack_etaMode[ele_index]
+            phi = event_tree.ScoutingElectron_bestTrack_phiMode[ele_index]
+            if event_tree.ScoutingElectron_bestTrack_etaMode[ele_index] > 1000:
                 continue
             corr_p4 = egregression.make_p4(comb_energy[ele_index],eta,phi)
             calo_corr_p4 = egregression.make_p4(calo_corr_energy[ele_index],eta,phi)
-            p4 = ROOT.Math.PtEtaPhiMVector(event_tree.ScoutingElectron_pt[ele_tree_index], eta, phi, 0.0)
+            p4 = ROOT.Math.PtEtaPhiMVector(event_tree.ScoutingElectron_pt[ele_index], eta, phi, 0.0)
             p4s.append(p4)
             corr_p4s.append(corr_p4)
             calo_corr_p4s.append(calo_corr_p4)
