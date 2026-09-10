@@ -165,7 +165,7 @@ def fill_mass_hists(vals, counts, corr, id_mask, hists, max_dr=None):
     region_cats = {"EBEB": eb1 & eb2, "EBEE": eb1 != eb2, "EEEE": ~eb1 & ~eb2}
     cosh_eta = np.cosh(eta)
     pts = {
-        "massHist": selected(vals["pt"]),
+        "hltMassHist": selected(vals["pt"]),
         "trkMassHist": selected(vals["bestTrack_pt"]),
         "trkModeMassHist": selected(vals["bestTrack_pMode"]) / cosh_eta,
         "caloCorrMassHist": selected(corr["corrEcalEnergy"]) / cosh_eta,
@@ -181,7 +181,7 @@ def fill_mass_hists(vals, counts, corr, id_mask, hists, max_dr=None):
 
         ele1, ele2 = ak.unzip(ak.combinations(p4, 2))
         masses = (ele1 + ele2).mass
-        for suffix, charge_mask in (("", opp_charge), ("SS", same_charge)):
+        for suffix, charge_mask in (("OS", opp_charge), ("SS", same_charge)):
             fills = [(name + suffix, charge_mask & pt_mask)]
             fills += [(name + reg + suffix, charge_mask & region_mask & pt_mask) for reg, region_mask in region_cats.items()]
             for hist_name, hist_mask in fills:
@@ -221,9 +221,9 @@ if __name__ == "__main__":
 
     hists = {
         name + region + suffix: np.zeros(len(MASS_BINS) - 1)
-        for name in ("massHist", "trkMassHist", "trkModeMassHist", "caloCorrMassHist", "caloTrkMassHist")
+        for name in ("hltMassHist", "trkMassHist", "trkModeMassHist", "caloCorrMassHist", "caloTrkMassHist")
         for region in ("", "EBEB", "EBEE", "EEEE") 
-        for suffix in ("", "SS")
+        for suffix in ("OS", "SS")
     }
 
     output_file = uproot.recreate(args.outputfile)

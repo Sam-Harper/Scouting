@@ -13,15 +13,20 @@ Example:
       python3 Scouting/Tools/scripts/applyRegFast.py -i in1.root in2.root ... --jpsi-sel
 
 Per-job stdout/stderr goes to <output>_jobI.log next to the output file.
+Progress is shown live by tailing the logs for "Processed X/Y events"
+lines (per-job block on a terminal, periodic summary lines otherwise).
 Parts and logs are deleted after a successful merge unless --keep-parts.
 """
 import argparse
 import concurrent.futures
 import os
+import re
 import shutil
 import subprocess
 import sys
 import time
+
+PROGRESS_RE = re.compile(r"Processed (\d+)/(\d+) events")
 
 
 def job_paths(outputfile, jobnr):
@@ -29,15 +34,60 @@ def job_paths(outputfile, jobnr):
     return f"{base}_job{jobnr}{ext}", f"{base}_job{jobnr}.log"
 
 
-def run_job(command, njobs, jobnr, outputfile):
+def last_progress(logfile):
+    """Return (events done, events total) from the log's last progress line."""
+    try:
+        with open(logfile, "rb") as log:
+            log.seek(0, os.SEEK_END)
+            log.seek(max(0, log.tell() - 4096))
+            tail = log.read().decode(errors="replace")
+    except OSError:
+        return None
+    matches = PROGRESS_RE.findall(tail)
+    return (int(matches[-1][0]), int(matches[-1][1])) if matches else None
+
+
+def run_job(command, njobs, jobnr, outputfile, status):
+    status["start"] = time.time()
+    status["state"] = "running"
     partfile, logfile = job_paths(outputfile, jobnr)
     cmd = command + ["--njobs", str(njobs), "--jobnr", str(jobnr), "-o", partfile]
-    start = time.time()
     with open(logfile, "w") as log:
         result = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT)
-    status = "done" if result.returncode == 0 else f"FAILED (exit {result.returncode}, see {logfile})"
-    print(f"job {jobnr}: {status} in {time.time() - start:.0f}s")
+    status["time"] = time.time() - status["start"]
+    status["rc"] = result.returncode
+    status["state"] = "done" if result.returncode == 0 else "failed"
     return result.returncode
+
+
+def status_lines(statuses, outputfile, start):
+    """One status line per job plus an aggregate total line."""
+    lines = []
+    events_done = events_total = 0
+    for jobnr, status in enumerate(statuses):
+        logfile = job_paths(outputfile, jobnr)[1]
+        progress = None if status["state"] == "queued" else last_progress(logfile)
+        if progress:
+            events_done += progress[0]
+            events_total += progress[1]
+        if status["state"] == "queued":
+            lines.append(f"job {jobnr}: queued")
+        elif status["state"] == "running":
+            if progress:
+                lines.append(f"job {jobnr}: {progress[0]}/{progress[1]} events")
+            else:
+                lines.append(f"job {jobnr}: starting")
+        elif status["state"] == "done":
+            lines.append(f"job {jobnr}: done in {status['time']:.0f}s")
+        else:
+            lines.append(f"job {jobnr}: FAILED (exit {status['rc']}, see {logfile})")
+    njobs_ended = sum(status["state"] in ("done", "failed") for status in statuses)
+    elapsed = time.time() - start
+    lines.append(
+        f"total: {njobs_ended}/{len(statuses)} jobs done, "
+        f"{events_done}/{events_total} events ({events_done / elapsed:.0f} ev/s, {elapsed:.0f}s elapsed)"
+    )
+    return lines
 
 
 if __name__ == "__main__":
@@ -60,24 +110,50 @@ if __name__ == "__main__":
         parser.error("hadd not found in PATH (set up the CMSSW/ROOT environment first)")
 
     max_parallel = args.max_parallel or args.njobs
+    statuses = [{"state": "queued", "rc": None, "time": None} for _ in range(args.njobs)]
     start = time.time()
+    is_tty = sys.stdout.isatty()
+    poll_interval = 2.0 if is_tty else 15.0
     with concurrent.futures.ThreadPoolExecutor(max_parallel) as pool:
-        returncodes = list(
-            pool.map(lambda i: run_job(command, args.njobs, i, args.outputfile), range(args.njobs))
-        )
+        futures = [
+            pool.submit(run_job, command, args.njobs, jobnr, args.outputfile, statuses[jobnr])
+            for jobnr in range(args.njobs)
+        ]
+        drawn_lines = 0
+        reported = set()
+        while True:
+            all_ended = all(future.done() for future in futures)
+            lines = status_lines(statuses, args.outputfile, start)
+            if is_tty:
+                # redraw the block in place: move up over the previous one
+                if drawn_lines:
+                    sys.stdout.write(f"\x1b[{drawn_lines}A")
+                sys.stdout.write("".join(f"\x1b[2K{line}\n" for line in lines))
+                sys.stdout.flush()
+                drawn_lines = len(lines)
+            else:
+                for jobnr, status in enumerate(statuses):
+                    if status["state"] in ("done", "failed") and jobnr not in reported:
+                        reported.add(jobnr)
+                        print(lines[jobnr], flush=True)
+                print(lines[-1], flush=True)
+            if all_ended:
+                break
+            concurrent.futures.wait(futures, timeout=poll_interval)
+    returncodes = [future.result() for future in futures]
     if any(returncodes):
-        failed = [i for i, rc in enumerate(returncodes) if rc]
+        failed = [jobnr for jobnr, rc in enumerate(returncodes) if rc]
         print(f"{len(failed)} job(s) failed: {failed}; not merging, parts and logs kept")
         sys.exit(1)
 
-    parts = [job_paths(args.outputfile, i)[0] for i in range(args.njobs)]
-    print(f"all jobs done in {time.time() - start:.0f}s, merging into {args.outputfile}")
+    parts = [job_paths(args.outputfile, jobnr)[0] for jobnr in range(args.njobs)]
+    print(f"merging into {args.outputfile}")
     merge = subprocess.run(["hadd", "-f", args.outputfile] + parts)
     if merge.returncode != 0:
         print("hadd failed; parts and logs kept")
         sys.exit(merge.returncode)
     if not args.keep_parts:
-        for i in range(args.njobs):
-            for path in job_paths(args.outputfile, i):
+        for jobnr in range(args.njobs):
+            for path in job_paths(args.outputfile, jobnr):
                 os.remove(path)
     print(f"done in {time.time() - start:.0f}s")
