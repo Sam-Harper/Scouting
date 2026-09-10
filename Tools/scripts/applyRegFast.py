@@ -40,7 +40,7 @@ except ImportError:
 
 ELE_BRANCHES = [
     "pt", "eta", "phi", "sigmaIetaIeta", "r9", "sMin", "sMaj","hOverE",
-    "rechitZeroSuppression", "seedId", "trackIso", "dEtaIn", "trackfbrem",
+    "rechitZeroSuppression", "seedId", "trackIso", "dEtaIn", "dPhiIn","trackfbrem",
     "bestTrack_etaMode", "bestTrack_phiMode", "bestTrack_pMode","bestTrack_pt",
     "bestTrack_qoverpModeError", "bestTrack_charge",
 ]
@@ -68,10 +68,10 @@ def get_id_mask(vals):
     valid_trk = vals["bestTrack_etaMode"] <= 1000
     trk_pt = vals["bestTrack_pMode"] / np.cosh(np.where(valid_trk, vals["bestTrack_etaMode"], 0.0))
     is_eb = np.abs(vals["eta"]) < 1.479
-    common = valid_trk & (vals["trackIso"] <= 0) & (np.abs(vals["dEtaIn"]) <= 0.03) & (trk_pt > 5)  
-    passing = common & is_eb & (vals["sigmaIetaIeta"] < 0.0105)
+    common = valid_trk & (vals["trackIso"] <= 0)  & (trk_pt > 3)  
+    passing = common & is_eb & (vals["sigmaIetaIeta"] < 0.0105) & (np.abs(vals["dPhiIn"]) <= 0.03) & (np.abs(vals["dEtaIn"]) <= 0.003)
     
-    passing |= common & ~is_eb & (vals["sigmaIetaIeta"] < 0.034)
+    passing |= common & ~is_eb & (vals["sigmaIetaIeta"] < 0.034) & (np.abs(vals["dPhiIn"]) <= 0.03) & (np.abs(vals["dEtaIn"]) <= 0.005)
     return passing
 
 
@@ -87,14 +87,17 @@ def get_jpsi_id_mask(vals, corr):
     trk_pt = vals["bestTrack_pMode"] / np.cosh(np.where(valid_trk, vals["bestTrack_etaMode"], 0.0))
     is_eb = np.abs(vals["eta"]) < 1.479
     rel_err = corr["corrEnergyErr"] / np.maximum(corr["corrEnergy"], 1e-9)
+    rel_err = 0
     pass_mask = (
         valid_trk & is_eb & (vals["sigmaIetaIeta"] < 0.0105)
-        & (np.abs(vals["dEtaIn"]) <= 0.01) & (trk_pt > 3) & (rel_err < 0.04)
+        & (np.abs(vals["dEtaIn"]) <= 0.03) & (trk_pt > 3) & (rel_err < 0.04)
+        & (np.abs(vals["dPhiIn"]) <= 0.1)
     )
     
     pass_mask |= (
         valid_trk & ~is_eb & (vals["sigmaIetaIeta"] < 0.031)
-        & (np.abs(vals["dEtaIn"]) <= 0.015) & (trk_pt > 5)
+        & (np.abs(vals["dEtaIn"]) <= 0.03) & (trk_pt > 5)
+        #& (np.abs(vals["dPhiIn"]) <= 0.06)
         & (vals["hOverE"] < 0.1)
     )
     return pass_mask
