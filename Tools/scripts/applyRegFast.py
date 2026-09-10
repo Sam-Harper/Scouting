@@ -80,18 +80,27 @@ def get_jpsi_id_mask(vals, corr, include_ee=False):
 
     At m ~ 3 GeV the two electrons sit inside each other's isolation
     cones, so no trackIso cut is applied; instead the track-cluster
-    matching is tightened and electrons with a large relative energy
-    uncertainty from the E-p combination regression are dropped.
+    matching is tightened and (in the barrel) electrons with a large
+    relative energy uncertainty from the E-p combination regression are
+    dropped.  The endcap cuts are optimised separately: endcap electrons
+    have relative energy uncertainties of 0.1-0.2, so the barrel rel_err
+    cut would remove them all and is replaced by a higher track pt
+    threshold and an hOverE cut.
     """
     valid_trk = vals["bestTrack_etaMode"] <= 1000
     trk_pt = vals["bestTrack_pMode"] / np.cosh(np.where(valid_trk, vals["bestTrack_etaMode"], 0.0))
     is_eb = np.abs(vals["eta"]) < 1.479
     rel_err = corr["corrEnergyErr"] / np.maximum(corr["corrEnergy"], 1e-9)
-    #rel_err = 0
-    common = valid_trk & (np.abs(vals["dEtaIn"]) <= 0.01) & (trk_pt > 3) & (rel_err < 0.04)
-    passing = common & is_eb & (vals["sigmaIetaIeta"] < 0.0105)
+    passing = (
+        valid_trk & is_eb & (vals["sigmaIetaIeta"] < 0.0105)
+        & (np.abs(vals["dEtaIn"]) <= 0.01) & (trk_pt > 3) & (rel_err < 0.04)
+    )
     if include_ee:
-        passing |= common & ~is_eb & (vals["sigmaIetaIeta"] < 0.034)
+        passing |= (
+            valid_trk & ~is_eb & (vals["sigmaIetaIeta"] < 0.031)
+            & (np.abs(vals["dEtaIn"]) <= 0.015) & (trk_pt > 5)
+            & (vals["hOverE"] < 0.1)
+        )
     return passing
 
 
@@ -129,12 +138,14 @@ def apply_regressions(vals, ecal_reg, comb_reg):
     }
 
 
-def fill_mass_hists(vals, counts, corr, id_mask, hists, max_dr=None):
+def fill_mass_hists(vals, counts, corr, id_mask, hists, max_dr=None, split_regions=False):
     """Fill the dielectron mass histograms from pairs of ID-passing electrons.
 
     Each histogram is filled from opposite-charge pairs; the "SS"-suffixed
     variant is filled from same-charge pairs.  If max_dr is given, only
     pairs with deltaR (from the track mode direction) below it are used.
+    With split_regions, additional histograms split by the pair's
+    detector-region category (EBEB/EBEE/EEEE) are filled.
     """
     sel = ak.unflatten(id_mask, counts)
 
@@ -153,6 +164,10 @@ def fill_mass_hists(vals, counts, corr, id_mask, hists, max_dr=None):
         pass_dr = (eta1 - eta2) ** 2 + dphi**2 < max_dr**2
         opp_charge = opp_charge & pass_dr
         same_charge = same_charge & pass_dr
+    region_cats = {}
+    if split_regions:
+        eb1, eb2 = ak.unzip(ak.combinations(selected(np.abs(vals["eta"]) < 1.479), 2))
+        region_cats = {"EBEB": eb1 & eb2, "EBEE": eb1 != eb2, "EEEE": ~eb1 & ~eb2}
     cosh_eta = np.cosh(eta)
     pts = {
         "massHist": selected(vals["pt"]),
@@ -169,9 +184,12 @@ def fill_mass_hists(vals, counts, corr, id_mask, hists, max_dr=None):
         ele1, ele2 = ak.unzip(ak.combinations(p4, 2))
         masses = (ele1 + ele2).mass
         for suffix, mask in (("", opp_charge), ("SS", same_charge)):
-            hists[name + suffix] += np.histogram(
-                ak.to_numpy(ak.flatten(masses[mask])), bins=MASS_BINS
-            )[0]
+            fills = [(name + suffix, mask)]
+            fills += [(name + reg + suffix, mask & cmask) for reg, cmask in region_cats.items()]
+            for hname, hmask in fills:
+                hists[hname] += np.histogram(
+                    ak.to_numpy(ak.flatten(masses[hmask])), bins=MASS_BINS
+                )[0]
 
 
 if __name__ == "__main__":
@@ -182,6 +200,7 @@ if __name__ == "__main__":
     parser.add_argument("--step-size", default="200 MB", help="uproot iteration step size")
     parser.add_argument("--include-ee", action="store_true", help="Also use endcap electrons in the mass histograms")
     parser.add_argument("--jpsi-sel", action="store_true", help="Use the low-mass (J/psi) electron ID and a deltaR<0.7 pair cut for the mass histograms")
+    parser.add_argument("--split-regions", action="store_true", help="Also write the mass histograms split by pair region (EBEB/EBEE/EEEE)")
     parser.add_argument("--datadir", default="Scouting/Tools/data", help="Directory with the regression npz files")
     args = parser.parse_args()
 
@@ -195,8 +214,9 @@ if __name__ == "__main__":
     )
 
     hists = {
-        name + suffix: np.zeros(len(MASS_BINS) - 1)
+        name + region + suffix: np.zeros(len(MASS_BINS) - 1)
         for name in ("massHist", "trkMassHist", "trkModeMassHist", "caloCorrMassHist", "caloTrkMassHist")
+        for region in (("", "EBEB", "EBEE", "EEEE") if args.split_regions else ("",))
         for suffix in ("", "SS")
     }
 
@@ -218,7 +238,9 @@ if __name__ == "__main__":
             id_mask = get_jpsi_id_mask(vals, corr, args.include_ee)
         else:
             id_mask = get_id_mask(vals, args.include_ee)
-        fill_mass_hists(vals, counts, corr, id_mask, hists, max_dr=0.7 if args.jpsi_sel else None)
+        fill_mass_hists(vals, counts, corr, id_mask, hists,
+                        max_dr=0.7 if args.jpsi_sel else None,
+                        split_regions=args.split_regions)
 
         out_electrons = ak.zip(
             {name: ak.unflatten(arr.astype(np.float32), counts) for name, arr in corr.items()}
