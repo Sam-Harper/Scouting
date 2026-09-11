@@ -230,8 +230,8 @@ if __name__ == "__main__":
 
     filtered_hists = get_hists(mass_hists, energies=["hlt", "trkMode","caloTrk"], 
                                charge="OS", region="EBEB")
-    filtered_hists = get_hists(mass_hists, energies=["caloTrk"], 
-                               charge=None, region="EBEB")
+    #filtered_hists = get_hists(mass_hists, energies=["caloTrk"], 
+    #                           charge=None, region="EBEB")
 
     regions = ["EBEB", "EBEE", "EEEE"]
     regions = ["EBEB"]
@@ -241,10 +241,10 @@ if __name__ == "__main__":
             for region in regions:
                 filtered_hists = get_hists(mass_hists, energies=[energy], 
                                            charge=None, region=region)
-                plot_hists(filtered_hists, c1, rebin=5, xrange=(0, 6), fit=args.fit,
+                plot_hists(filtered_hists, c1, rebin=5, xrange=(0, 120), fit=args.fit,
                            normalise=True)
                 yield
     gen  = plot_all_hists()
-    #hist = plot_hists(filtered_hists, c1, rebin=5, xrange=(0, 6), fit=args.fit,
-    #                   normalise=False)
+    hist = plot_hists(filtered_hists, c1, rebin=50, xrange=(60, 120), fit=args.fit,
+                       normalise=False)
 
