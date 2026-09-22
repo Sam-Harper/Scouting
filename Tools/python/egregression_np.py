@@ -80,7 +80,7 @@ def decode_seed_id(seed_id):
     return np.where(is_eb, ieta, ix), np.where(is_eb, iphi, iy), is_eb
 
 
-def get_features_calo(vals):
+def get_features_calo(vals, ecal_scale=1.0):
     """Feature matrix for the ECAL-only regression.
 
     vals: dict of flat per-electron arrays with keys
@@ -92,7 +92,7 @@ def get_features_calo(vals):
     features = np.column_stack(
         [
             vals["rho"],
-            pt_to_p(vals["pt"], vals["eta"]),
+            pt_to_p(vals["pt"], vals["eta"]) * ecal_scale,
             vals["eta"],
             vals["phi"],
             vals["sigmaIetaIeta"],
@@ -107,12 +107,12 @@ def get_features_calo(vals):
     return features, is_eb
 
 
-def get_raw_comb(vals, ecal_mean, ecal_sigma):
+def get_raw_comb(vals, ecal_mean, ecal_sigma, ecal_scale=1.0):
     """Raw E-p combination (see egregression.get_raw_comb).
 
     vals needs keys pt, eta, bestTrack_pMode, bestTrack_qoverpModeError.
     """
-    calo_e = pt_to_p(vals["pt"], vals["eta"])
+    calo_e = pt_to_p(vals["pt"], vals["eta"]) * ecal_scale
     calo_e_corr = calo_e * ecal_mean
     calo_e_err = calo_e * ecal_sigma
     trk_p = np.asarray(vals["bestTrack_pMode"], dtype=np.float64)
@@ -122,14 +122,14 @@ def get_raw_comb(vals, ecal_mean, ecal_sigma):
     return np.where(denom == 0, calo_e_corr, numer / np.where(denom == 0, 1.0, denom))
 
 
-def get_features_comb(vals, ecal_mean, ecal_sigma):
+def get_features_comb(vals, ecal_mean, ecal_sigma,ecal_scale=1.0):
     """Feature matrix for the E-p combination regression.
 
     vals needs keys pt, eta, r9, trackfbrem, bestTrack_pMode,
     bestTrack_qoverpModeError, bestTrack_etaMode, bestTrack_phiMode.
     Returns a (n, 8) float32 matrix.
     """
-    calo_e_corr = pt_to_p(vals["pt"], vals["eta"]) * ecal_mean
+    calo_e_corr = pt_to_p(vals["pt"], vals["eta"]) * ecal_mean * ecal_scale
     trk_p_mode = vals["bestTrack_pMode"]
     return np.column_stack(
         [

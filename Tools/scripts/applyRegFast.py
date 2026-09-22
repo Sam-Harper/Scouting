@@ -42,7 +42,7 @@ ELE_BRANCHES = [
     "pt", "eta", "phi", "sigmaIetaIeta", "r9", "sMin", "sMaj","hOverE",
     "rechitZeroSuppression", "seedId", "trackIso", "dEtaIn", "dPhiIn","trackfbrem",
     "bestTrack_etaMode", "bestTrack_phiMode", "bestTrack_pMode","bestTrack_pt",
-    "bestTrack_qoverpModeError", "bestTrack_charge",
+    "bestTrack_qoverpModeError", "bestTrack_charge","transparencyCorr"
 ]
 BRANCHES = (
     ["run", "luminosityBlock", "event", "ScoutingRho_fixedGridRhoFastjetAll"]
@@ -103,16 +103,16 @@ def get_jpsi_id_mask(vals, corr):
     return pass_mask
 
 
-def apply_regressions(vals, ecal_reg, comb_reg):
+def apply_regressions(vals, ecal_reg, comb_reg, ecal_scale=1.0, tag=""):
     """Run both regression stages; returns a dict of flat result arrays.
 
     Electrons without a valid best track get the ECAL-only corrected
     energy (and its error) copied into the combined columns.
     """
-    calo_features, is_eb = egreg.get_features_calo(vals)
+    calo_features, is_eb = egreg.get_features_calo(vals, ecal_scale)
     ecal_mean, ecal_sigma = ecal_reg.get_meansigma(calo_features, is_eb)
 
-    ecal_energy = egreg.pt_to_p(vals["pt"], vals["eta"])
+    ecal_energy = egreg.pt_to_p(vals["pt"], vals["eta"]) * ecal_scale
     corr_ecal_energy = ecal_energy * ecal_mean
     corr_ecal_energy_err = ecal_energy * ecal_sigma
 
@@ -121,19 +121,20 @@ def apply_regressions(vals, ecal_reg, comb_reg):
     corr_energy_err = corr_ecal_energy_err.copy()
     if np.any(valid_trk):
         trk_vals = {name: np.asarray(arr)[valid_trk] for name, arr in vals.items()}
+        scale = ecal_scale[valid_trk] if type(ecal_scale) is np.ndarray else ecal_scale
         comb_features = egreg.get_features_comb(
-            trk_vals, ecal_mean[valid_trk], ecal_sigma[valid_trk]
+            trk_vals, ecal_mean[valid_trk], ecal_sigma[valid_trk], ecal_scale=scale
         )
         comb_mean, comb_sigma = comb_reg.get_meansigma(comb_features, is_eb[valid_trk])
-        raw_comb = egreg.get_raw_comb(trk_vals, ecal_mean[valid_trk], ecal_sigma[valid_trk])
+        raw_comb = egreg.get_raw_comb(trk_vals, ecal_mean[valid_trk], ecal_sigma[valid_trk], ecal_scale=scale)
         corr_energy[valid_trk] = raw_comb * comb_mean
         corr_energy_err[valid_trk] = raw_comb * comb_sigma
 
     return {
-        "corrEcalEnergy": corr_ecal_energy,
-        "corrEcalEnergyErr": corr_ecal_energy_err,
-        "corrEnergy": corr_energy,
-        "corrEnergyErr": corr_energy_err,
+        f"corrEcalEnergy{tag}": corr_ecal_energy,
+        f"corrEcalEnergyErr{tag}": corr_ecal_energy_err,
+        f"corrEnergy{tag}": corr_energy,
+        f"corrEnergyErr{tag}": corr_energy_err,
     }
 
 
@@ -172,7 +173,9 @@ def fill_mass_hists(vals, counts, corr, id_mask, hists, max_dr=None):
         "trkMassHist": selected(vals["bestTrack_pt"]),
         "trkModeMassHist": selected(vals["bestTrack_pMode"]) / cosh_eta,
         "caloCorrMassHist": selected(corr["corrEcalEnergy"]) / cosh_eta,
+        "caloCorrMassHistLaser": selected(corr["corrEcalEnergyLaser"]) / cosh_eta, 
         "caloTrkMassHist": selected(corr["corrEnergy"]) / cosh_eta,
+        "caloTrkMassHistLaser": selected(corr["corrEnergyLaser"]) / cosh_eta,
     }
     for name, pt in pts.items():
         pt_pass1, pt_pass2 = ak.unzip(ak.combinations(pt > 0, 2))
@@ -224,7 +227,9 @@ if __name__ == "__main__":
 
     hists = {
         name + region + suffix: np.zeros(len(MASS_BINS) - 1)
-        for name in ("hltMassHist", "trkMassHist", "trkModeMassHist", "caloCorrMassHist", "caloTrkMassHist")
+        for name in ("hltMassHist", "trkMassHist", "trkModeMassHist", 
+                     "caloCorrMassHist", "caloTrkMassHist", 
+                     "caloCorrMassHistLaser", "caloTrkMassHistLaser")
         for region in ("", "EBEB", "EBEE", "EEEE") 
         for suffix in ("OS", "SS")
     }
@@ -245,12 +250,13 @@ if __name__ == "__main__":
             events = events[: args.max_events - events_written]
         vals, counts = get_flat_electrons(events)
         corr = apply_regressions(vals, ecal_reg, comb_reg)
+        corr.update(apply_regressions(vals, ecal_reg, comb_reg, ecal_scale=vals["transparencyCorr"], tag="Laser"))
         if args.jpsi_sel:
             id_mask = get_jpsi_id_mask(vals, corr)
         else:
             id_mask = get_id_mask(vals)
         fill_mass_hists(vals, counts, corr, id_mask, hists,
-                        max_dr=0.7 if args.jpsi_sel else None,
+                        max_dr=1.2 if args.jpsi_sel else None,
         )
 
         out_electrons = ak.zip(
