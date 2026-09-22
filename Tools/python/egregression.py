@@ -121,7 +121,7 @@ def get_raw_comb(tree,ecal_meansigmas,ele_mask=None):
        (corrEcalE*trkPErr^2 + trkP*ecalErr^2) / (trkPErr^2 + ecalErr^2)
     with the track quantities taken from the best track mode variables
     """
-    raw_comb = [None]*tree.nScoutingElectron
+    raw_comb = [0]*tree.nScoutingElectron
     if ele_mask is None:
         ele_mask = [True]*tree.nScoutingElectron
     for ele_index in range(tree.nScoutingElectron):

@@ -55,10 +55,11 @@ if __name__ == "__main__":
             print(f"Processing event {event_indx}/{nr_events}")
         ele_passing_id = get_eles_id_mask(event_tree)        
         calo_features = egregression.get_features_calo(event_tree,ele_passing_id)
-        calo_meansigmas = [ecal_reg.get_meansigma(f["features"],f["isEB"]) for f in calo_features]
+        calo_meansigmas = [ecal_reg.get_meansigma(f["features"],f["isEB"]) if f is not None else [1.0, 0.0] for f in calo_features]
         comb_features = egregression.get_features_comb(event_tree,calo_meansigmas,ele_passing_id)
-        comb_meansigmas = [comb_reg.get_meansigma(f["features"],f["isEB"]) for f in comb_features]
+        comb_meansigmas = [comb_reg.get_meansigma(f["features"],f["isEB"]) if f is not None else [1.0, 0.0] for f in comb_features]
         raw_comb = egregression.get_raw_comb(event_tree,calo_meansigmas,ele_passing_id)
+        
 
         calo_corr_energy = [egregression.pt_to_p(event_tree.ScoutingElectron_pt[index],event_tree.ScoutingElectron_eta[index])*meansigma[0] for index,meansigma in enumerate(calo_meansigmas)]
         comb_energy = [raw*meansigma[0] for raw,meansigma in zip(raw_comb,comb_meansigmas)]
