@@ -27,6 +27,7 @@ import sys
 import time
 
 PROGRESS_RE = re.compile(r"Processed (\d+)/(\d+) events")
+COUNTING_RE = re.compile(r"Counted (\d+)/(\d+) files")
 
 
 def job_paths(outputfile, jobnr):
@@ -34,16 +35,25 @@ def job_paths(outputfile, jobnr):
     return f"{base}_job{jobnr}{ext}", f"{base}_job{jobnr}.log"
 
 
-def last_progress(logfile):
-    """Return (events done, events total) from the log's last progress line."""
+def log_tail(logfile):
     try:
         with open(logfile, "rb") as log:
             log.seek(0, os.SEEK_END)
             log.seek(max(0, log.tell() - 4096))
-            tail = log.read().decode(errors="replace")
+            return log.read().decode(errors="replace")
     except OSError:
-        return None
-    matches = PROGRESS_RE.findall(tail)
+        return ""
+
+
+def last_progress(logfile):
+    """Return (events done, events total) from the log's last progress line."""
+    matches = PROGRESS_RE.findall(log_tail(logfile))
+    return (int(matches[-1][0]), int(matches[-1][1])) if matches else None
+
+
+def last_counting(logfile):
+    """Return (files counted, files total) while the job is still counting entries."""
+    matches = COUNTING_RE.findall(log_tail(logfile))
     return (int(matches[-1][0]), int(matches[-1][1])) if matches else None
 
 
@@ -73,8 +83,11 @@ def status_lines(statuses, outputfile, start):
         if status["state"] == "queued":
             lines.append(f"job {jobnr}: queued")
         elif status["state"] == "running":
+            counting = last_counting(logfile) if not progress else None
             if progress:
                 lines.append(f"job {jobnr}: {progress[0]}/{progress[1]} events")
+            elif counting:
+                lines.append(f"job {jobnr}: counting entries, {counting[0]}/{counting[1]} files")
             else:
                 lines.append(f"job {jobnr}: starting")
         elif status["state"] == "done":
@@ -83,9 +96,16 @@ def status_lines(statuses, outputfile, start):
             lines.append(f"job {jobnr}: FAILED (exit {status['rc']}, see {logfile})")
     njobs_ended = sum(status["state"] in ("done", "failed") for status in statuses)
     elapsed = time.time() - start
+    rate = events_done / elapsed
+    # events_total only covers jobs that have started; scale it up by the job
+    # count so the ETA reflects the whole run rather than the jobs seen so far
+    njobs_seen = sum(status["state"] != "queued" for status in statuses) or 1
+    events_expected = events_total * len(statuses) / njobs_seen
+    eta = (events_expected - events_done) / rate if rate else 0
     lines.append(
         f"total: {njobs_ended}/{len(statuses)} jobs done, "
-        f"{events_done}/{events_total} events ({events_done / elapsed:.0f} ev/s, {elapsed:.0f}s elapsed)"
+        f"{events_done}/{events_expected:.0f} events ({rate:.0f} ev/s, "
+        f"{elapsed / 60:.1f} min elapsed, {eta / 60:.1f} min left)"
     )
     return lines
 

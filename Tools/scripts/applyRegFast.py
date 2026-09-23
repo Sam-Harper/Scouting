@@ -201,7 +201,7 @@ if __name__ == "__main__":
     parser.add_argument("-i", "--inputfiles", nargs="+", help="Input file(s)", required=True)
     parser.add_argument("-o", "--outputfile", help="Output file", required=True)
     parser.add_argument("-n", "--max-events", type=int, default=None, help="Process at most this many events (total across all files)")
-    parser.add_argument("--step-size", default="200 MB", help="uproot iteration step size")
+    parser.add_argument("--step-size", default="50 MB", help="uproot iteration step size")
     parser.add_argument("--decomp-threads", type=int, default=8, help="Threads for uproot basket decompression")
     parser.add_argument("--njobs", type=int, default=1, help="Split the input files over this many jobs")
     parser.add_argument("--jobnr", type=int, default=0, help="Which job this is (0..njobs-1); processes inputfiles[jobnr::njobs]")
@@ -210,7 +210,7 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
 
-    write_tree = True
+    write_tree = False
 
     if len(args.inputfiles) == 1 and not args.inputfiles[0].endswith(".root"):
         with open(args.inputfiles[0]) as f:
@@ -247,18 +247,24 @@ if __name__ == "__main__":
 
     output_file = uproot.recreate(args.outputfile)
     events_written = 0
+    events_processed = 0
     start_time = time.time()
 
     input_trees = [f"{name}:Events" for name in inputfiles]
-    total_entries = sum(entries for _, _, entries in uproot.num_entries(input_trees))
+    total_entries = 0
+    for nfiles_counted, (_, _, entries) in enumerate(uproot.num_entries(input_trees), 1):
+        total_entries += entries
+        print(f"Counted {nfiles_counted}/{len(input_trees)} files "
+              f"({total_entries} events, {time.time() - start_time:.0f}s elapsed)")
     if args.max_events is not None:
         total_entries = min(total_entries, args.max_events)
+    start_time = time.time()  # rate/ETA should not be dragged down by the counting phase
 
     decomp_executor = concurrent.futures.ThreadPoolExecutor(args.decomp_threads)
     for events in uproot.iterate(input_trees, BRANCHES, step_size=args.step_size,
                                  decompression_executor=decomp_executor):
         if args.max_events is not None:
-            events = events[: args.max_events - events_written]
+            events = events[: args.max_events - events_processed]
         vals, counts = get_flat_electrons(events)
         corr = apply_regressions(vals, ecal_reg, comb_reg)
         corr.update(apply_regressions(vals, ecal_reg, comb_reg, ecal_scale=vals["transparencyCorr"], tag="Laser"))
@@ -269,7 +275,7 @@ if __name__ == "__main__":
         fill_mass_hists(vals, counts, corr, id_mask, hists,
                         max_dr=1.2 if args.jpsi_sel else None,
         )
-        if write_tree == 0:
+        if write_tree:
             out_electrons = ak.zip(
                 {name: ak.unflatten(arr.astype(np.float32), counts) for name, arr in corr.items()}
             )
@@ -285,9 +291,13 @@ if __name__ == "__main__":
                 output_file["Events"].extend(out_chunk)
 
             events_written += len(events)
-        rate = events_written / (time.time() - start_time)
-        print(f"Processed {events_written}/{total_entries} events ({rate:.0f} ev/s)")
-        if args.max_events is not None and events_written >= args.max_events:
+
+        events_processed += len(events)
+        rate = events_processed / (time.time() - start_time)
+        eta = (total_entries - events_processed) / rate if rate else 0
+        print(f"Processed {events_processed}/{total_entries} events "
+              f"({rate:.0f} ev/s, {eta / 60:.1f} min left)")
+        if args.max_events is not None and events_processed >= args.max_events:
             break
 
     for name, counts_hist in hists.items():
