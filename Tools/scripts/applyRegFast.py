@@ -210,9 +210,20 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
 
+    write_tree = True
+
+    if len(args.inputfiles) == 1 and not args.inputfiles[0].endswith(".root"):
+        with open(args.inputfiles[0]) as f:
+            inputfiles = [line.strip() for line in f if line.strip()]
+    else:
+        inputfiles = args.inputfiles
+    
     if not 0 <= args.jobnr < args.njobs:
         parser.error(f"--jobnr must be in [0, {args.njobs})")
-    inputfiles = args.inputfiles[args.jobnr :: args.njobs]
+
+    print("inputfiles before job split:", len(inputfiles))
+    print("inputfiles after job split:", len(inputfiles[args.jobnr :: args.njobs]))
+    inputfiles = inputfiles[args.jobnr :: args.njobs]
     if not inputfiles:
         parser.error(f"job {args.jobnr}/{args.njobs} has no input files ({len(args.inputfiles)} files given)")
 
@@ -258,22 +269,22 @@ if __name__ == "__main__":
         fill_mass_hists(vals, counts, corr, id_mask, hists,
                         max_dr=1.2 if args.jpsi_sel else None,
         )
+        if write_tree == 0:
+            out_electrons = ak.zip(
+                {name: ak.unflatten(arr.astype(np.float32), counts) for name, arr in corr.items()}
+            )
+            out_chunk = {
+                "run": events["run"],
+                "luminosityBlock": events["luminosityBlock"],
+                "event": events["event"],
+                "ScoutingElectron": out_electrons,
+            }
+            if events_written == 0:
+                output_file["Events"] = out_chunk
+            else:
+                output_file["Events"].extend(out_chunk)
 
-        out_electrons = ak.zip(
-            {name: ak.unflatten(arr.astype(np.float32), counts) for name, arr in corr.items()}
-        )
-        out_chunk = {
-            "run": events["run"],
-            "luminosityBlock": events["luminosityBlock"],
-            "event": events["event"],
-            "ScoutingElectron": out_electrons,
-        }
-        if events_written == 0:
-            output_file["Events"] = out_chunk
-        else:
-            output_file["Events"].extend(out_chunk)
-
-        events_written += len(events)
+            events_written += len(events)
         rate = events_written / (time.time() - start_time)
         print(f"Processed {events_written}/{total_entries} events ({rate:.0f} ev/s)")
         if args.max_events is not None and events_written >= args.max_events:
